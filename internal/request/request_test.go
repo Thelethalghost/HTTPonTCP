@@ -8,49 +8,104 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type chunkReader struct {
+type chunkreader struct {
 	data            string
-	numBytesPerRead int
+	numbytesperread int
 	pos             int
 }
 
-// Read reads up to len(p) or numBytesPerRead bytes from the string per call
+// read reads up to len(p) or numbytesperread bytes from the string per call
 // its useful for simulating reading a variable number of bytes per chunk from a network connection
-func (cr *chunkReader) Read(p []byte) (n int, err error) {
+func (cr *chunkreader) read(p []byte) (n int, err error) {
 	if cr.pos >= len(cr.data) {
-		return 0, io.EOF
+		return 0, io.eof
 	}
-	endIndex := cr.pos + cr.numBytesPerRead
-	if endIndex > len(cr.data) {
-		endIndex = len(cr.data)
+	endindex := cr.pos + cr.numbytesperread
+	if endindex > len(cr.data) {
+		endindex = len(cr.data)
 	}
-	n = copy(p, cr.data[cr.pos:endIndex])
+	n = copy(p, cr.data[cr.pos:endindex])
 	cr.pos += n
 
 	return n, nil
 }
-func TestRequestLineParse(t *testing.T) {
-	// Test: Good GET Request line
+func testrequestlineparse(t *testing.t) {
+	// test: good get request line
+	reader := &chunkreader{
+		data:            "get / http/1.1\r\nhost: localhost:42069\r\nuser-agent: curl/7.81.0\r\naccept: */*\r\n\r\n",
+		numbytesperread: 3,
+	}
+	r, err := requestfromreader(reader)
+	require.noerror(t, err)
+	require.notnil(t, r)
+	assert.equal(t, "get", r.requestline.method)
+	assert.equal(t, "/", r.requestline.requesttarget)
+	assert.equal(t, "1.1", r.requestline.httpversion)
+
+	// test: good get request line with path
+	reader = &chunkreader{
+		data:            "get /coffee http/1.1\r\nhost: localhost:42069\r\nuser-agent: curl/7.81.0\r\naccept: */*\r\n\r\n",
+		numbytesperread: 1,
+	}
+	r, err = requestfromreader(reader)
+	require.noerror(t, err)
+	require.notnil(t, r)
+	assert.equal(t, "get", r.requestline.method)
+	assert.equal(t, "/coffee", r.requestline.requesttarget)
+	assert.equal(t, "1.1", r.requestline.httpversion)
+}
+
+func testheaderparse(t *testing.t) {
+	// test: standard headers
+	reader := &chunkreader{
+		data:            "get / http/1.1\r\nhost: localhost:42069\r\nuser-agent: curl/7.81.0\r\naccept: */*\r\n\r\n",
+		numbytesperread: 3,
+	}
+	r, err := requestfromreader(reader)
+	require.noerror(t, err)
+	require.notnil(t, r)
+	res, ok := r.headers.get("host")
+	assert.true(t, ok)
+	assert.equal(t, "localhost:42069", res)
+	res, ok = r.headers.get("user-agent")
+	assert.true(t, ok)
+	assert.equal(t, "curl/7.81.0", res)
+	res, ok = r.headers.get("accept")
+	assert.true(t, ok)
+	assert.equal(t, "*/*", res)
+	// test: malformed header
+	reader = &chunkreader{
+		data:            "get / http/1.1\r\nhost localhost:42069\r\n\r\n",
+		numbytesperread: 3,
+	}
+	r, err = requestfromreader(reader)
+	require.error(t, err)
+}
+
+func testbodyparse(t *testing.t) {
+	// Test: Standard Body
 	reader := &chunkReader{
-		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 13\r\n" +
+			"\r\n" +
+			"hello world!\n",
 		numBytesPerRead: 3,
 	}
 	r, err := RequestFromReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	assert.Equal(t, "GET", r.RequestLine.Method)
-	assert.Equal(t, "/", r.RequestLine.RequestTarget)
-	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
+	assert.Equal(t, "hello world!\n", string(r.Body))
 
-	// Test: Good GET Request line with path
+	// Test: Body shorter than reported content length
 	reader = &chunkReader{
-		data:            "GET /coffee HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
-		numBytesPerRead: 1,
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 20\r\n" +
+			"\r\n" +
+			"partial content",
+		numBytesPerRead: 3,
 	}
 	r, err = RequestFromReader(reader)
-	require.NoError(t, err)
-	require.NotNil(t, r)
-	assert.Equal(t, "GET", r.RequestLine.Method)
-	assert.Equal(t, "/coffee", r.RequestLine.RequestTarget)
-	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
+	require.Error(t, err)
 }

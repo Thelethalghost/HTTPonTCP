@@ -32,5 +32,9 @@ func main() {
 		version := request.RequestLine.HttpVersion
 
 		fmt.Printf("Request Line: \n - Method: %s\n - Target: %s\n - Version: %s\n", method, target, version)
+		fmt.Printf("Headers:\n")
+		request.Headers.ForEach(func(n, v string) {
+			fmt.Printf("- %s: %s\n", n, v)
+		})
 	}
 }

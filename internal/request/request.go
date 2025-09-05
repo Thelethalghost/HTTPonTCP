@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
+
+	"github.com/Thelethalghost/httpfromtcp/internal/headers"
 )
 
 type RequestLine struct {
@@ -15,25 +19,46 @@ type RequestLine struct {
 type parserState string
 
 const (
-	StateInit  parserState = "init"
-	StateDone  parserState = "done"
-	StateError parserState = "error"
+	StateInit    parserState = "init"
+	StateHeaders parserState = "headers"
+	StateBody    parserState = "body"
+	StateDone    parserState = "done"
+	StateError   parserState = "error"
 )
 
 type Request struct {
 	RequestLine RequestLine
 	state       parserState
+	Headers     *headers.Headers
+	Body        string
+}
+
+func getHeaderInt(h *headers.Headers, name string, defaultValue int) int {
+	value, exists := h.Get(strings.ToLower(name))
+	if !exists {
+		return defaultValue
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+
+	return n
 }
 
 func newRequest() *Request {
 	return &Request{
-		state: StateInit,
+		state:   StateInit,
+		Headers: headers.NewHeaders(),
+		Body:    "",
 	}
 }
 
 var ErrorMalformedRequestLine = fmt.Errorf("Malformed Request Line")
 var ErrorUnsupportedHTTP = fmt.Errorf("Http Version is unsupported")
 var ErrorRequestInErrorState = fmt.Errorf("Request in error State")
+var ErrorIncompleteBody = fmt.Errorf("Body is Incomplete")
 var SEPERATOR = []byte("\r\n")
 
 func parseRequestLine(b []byte) (*RequestLine, int, error) {
@@ -69,9 +94,10 @@ func (r *Request) parse(data []byte) (int, error) {
 	read := 0
 outer:
 	for {
+		currentData := data[read:]
 		switch r.state {
 		case StateInit:
-			rl, n, err := parseRequestLine(data[read:])
+			rl, n, err := parseRequestLine(currentData)
 			if err != nil {
 				r.state = StateError
 				return 0, err
@@ -83,13 +109,47 @@ outer:
 
 			r.RequestLine = *rl
 			read += n
-			r.state = StateDone
+			r.state = StateHeaders
+
+		case StateHeaders:
+			n, done, err := r.Headers.Parse(currentData)
+
+			if err != nil {
+				return 0, err
+			}
+
+			if n == 0 {
+				break outer
+			}
+
+			read += n
+
+			if done {
+				r.state = StateBody
+			}
+
+		case StateBody:
+			length := getHeaderInt(r.Headers, "Content-Length", 0)
+			if length == 0 {
+				r.state = StateDone
+			}
+
+			remaining := length - len(r.Body)
+			r.Body += string(currentData[:remaining])
+			read += remaining
+
+			if len(r.Body) == length {
+				r.state = StateDone
+			}
 
 		case StateDone:
 			break outer
 
 		case StateError:
 			return 0, ErrorRequestInErrorState
+
+		default:
+			panic("Bad Coding")
 		}
 	}
 	return read, nil
