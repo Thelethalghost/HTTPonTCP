@@ -89,12 +89,20 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 	return rl, read, nil
 }
 
+func (r *Request) hasBody() bool {
+	length := getHeaderInt(r.Headers, "content-length", 0)
+	return length > 0
+}
+
 func (r *Request) parse(data []byte) (int, error) {
 
 	read := 0
 outer:
 	for {
 		currentData := data[read:]
+		if len(currentData) == 0 {
+			break outer
+		}
 		switch r.state {
 		case StateInit:
 			rl, n, err := parseRequestLine(currentData)
@@ -115,6 +123,7 @@ outer:
 			n, done, err := r.Headers.Parse(currentData)
 
 			if err != nil {
+				r.state = StateError
 				return 0, err
 			}
 
@@ -125,16 +134,21 @@ outer:
 			read += n
 
 			if done {
-				r.state = StateBody
+				if r.hasBody() {
+					r.state = StateBody
+				} else {
+					r.state = StateDone
+				}
 			}
 
 		case StateBody:
-			length := getHeaderInt(r.Headers, "Content-Length", 0)
+			length := getHeaderInt(r.Headers, "content-length", 0)
 			if length == 0 {
 				r.state = StateDone
+				break
 			}
 
-			remaining := length - len(r.Body)
+			remaining := min(length-len(r.Body), len(currentData))
 			r.Body += string(currentData[:remaining])
 			read += remaining
 
